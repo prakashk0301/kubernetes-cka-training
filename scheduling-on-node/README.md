@@ -194,6 +194,7 @@ Run this to taint a worker node:
 
 ```bash
 kubectl taint nodes <worker-node-1> key=value:NoSchedule
+ex: kubectl taint nodes ip-172-31-80-76 node=gpu:NoSchedule
 ```
 
 Verify:
@@ -214,9 +215,9 @@ spec:
   - name: nginx
     image: nginx
   tolerations:
-  - key: "key"
+  - key: "node"
     operator: "Equal"
-    value: "value"
+    value: "gpu"
     effect: "NoSchedule"
 ```
 
