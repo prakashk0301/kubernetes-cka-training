@@ -15,11 +15,12 @@ RBAC is a method of regulating access to Kubernetes resources based on the roles
 
 ---
 
-## 2. Role
+## 2. Example: Granting Read-Only Pod Access to User `jane` in the `dev` Namespace
 
-A Role defines permissions within a single namespace.
+This example demonstrates how to grant user `jane` read-only access to pods in the `dev` namespace using RBAC.
 
-**YAML Example:**
+### Step 1: Create the Role
+**pod-reader-role-dev.yaml**
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -32,21 +33,13 @@ rules:
   verbs: ["get", "watch", "list"]
 ```
 
-**Use Case:**
-- Allow users to read pods in the `dev` namespace only.
-
----
-
-## 3. RoleBinding
-
-A RoleBinding grants the permissions defined in a Role to a user or service account within a namespace.
-
-**YAML Example:**
+### Step 2: Create the RoleBinding
+**pod-reader-rolebinding-dev.yaml**
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: read-pods
+  name: read-pods-in-dev
   namespace: dev
 subjects:
 - kind: User
@@ -58,8 +51,85 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
 ```
 
-**Use Case:**
-- Bind the `pod-reader` Role to user `jane` in the `dev` namespace.
+### Step 3: Apply the Role and RoleBinding
+```bash
+kubectl apply -f pod-reader-role-dev.yaml
+kubectl apply -f pod-reader-rolebinding-dev.yaml
+```
+
+---
+
+## 3. User Authentication in Self-Managed Clusters
+
+Kubernetes does not manage user accounts directly. For self-managed clusters, you typically use certificate-based authentication.
+
+### Step-by-Step: Creating a User and Assigning RBAC Permissions
+
+#### 1. Generate a Private Key and CSR for `jane`
+```bash
+openssl genrsa -out jane.key 2048
+openssl req -new -key jane.key -out jane.csr -subj "/CN=jane/O=devs"
+```
+
+#### 2. Generate base64 CSR and create the Kubernetes CSR YAML
+```bash
+cat jane.csr | base64 | tr -d '\n'
+```
+Copy the output and use it in the `request` field below:
+
+**csr.yaml**
+```yaml
+apiVersion: certificates.k8s.io/v1
+kind: CertificateSigningRequest
+metadata:
+  name: jane-csr
+  namespace: dev
+spec:
+  request: <base64-encoded-csr-content>
+  signerName: kubernetes.io/kube-apiserver-client
+  expirationSeconds: 86400
+  usages:
+  - client auth
+```
+> Replace `<base64-encoded-csr-content>` with the base64 string from the previous command.
+
+```bash
+kubectl apply -f csr.yaml
+```
+
+#### 3. Approve the CSR and Retrieve the Certificate
+```bash
+kubectl certificate approve jane-csr
+kubectl get csr jane-csr -o jsonpath='{.status.certificate}' | base64 -d > jane.crt
+```
+
+#### 4. Configure kubectl for User `jane`
+```bash
+kubectl config set-credentials jane --client-certificate=jane.crt --client-key=jane.key --embed-certs=true
+kubectl config set-context jane-context --cluster=<your-cluster-name> --user=jane
+kubectl config use-context jane-context
+```
+> Replace `<your-cluster-name>` with your actual cluster name (see `kubectl config get-clusters`).
+
+---
+
+## 4. Testing Access
+
+1. Try to create a pod as `jane` (should fail):
+   ```bash
+   kubectl apply -f sample-pod.yml -n dev
+   # Expect a permission error
+   ```
+2. Switch to admin context and create a pod:
+   ```bash
+   kubectl config use-context kubernetes-admin@kubernetes --cluster=kubernetes
+   kubectl apply -f sample-pod.yml -n dev
+   ```
+3. Switch back to `jane` and verify pod access:
+   ```bash
+   kubectl config use-context jane-context --cluster=kubernetes
+   kubectl get pod -n dev
+   ```
 
 ---
 
@@ -216,47 +286,8 @@ If not enabled, ensure `--authorization-mode=Node,RBAC` is set in `/etc/kubernet
 
 ---
 
-## 11. User Authentication in Self-Managed Clusters
 
-Kubernetes does not manage user accounts directly. For self-managed clusters, you typically use certificate-based authentication:
-
-**Example: Creating a User Certificate**
-```bash
-# Generate private key
-openssl genrsa -out dev-user.key 2048
-
-# Generate CSR
-openssl req -new -key dev-user.key -out dev-user.csr -subj "/CN=dev-user/O=developers"
-
-# Create Kubernetes CSR object
-cat <<EOF | kubectl apply -f -
-apiVersion: certificates.k8s.io/v1
-kind: CertificateSigningRequest
-metadata:
-  name: dev-user-csr
-spec:
-  request: $(cat dev-user.csr | base64 | tr -d '\n')
-  signerName: kubernetes.io/kube-apiserver-client
-  expirationSeconds: 86400
-  usages:
-  - client auth
-EOF
-
-# Approve the CSR
-kubectl certificate approve dev-user-csr
-
-# Get the signed certificate
-kubectl get csr dev-user-csr -o jsonpath='{.status.certificate}' | base64 -d > dev-user.crt
-
-# Configure kubectl context for dev-user
-kubectl config set-credentials dev-user --client-certificate=dev-user.crt --client-key=dev-user.key --embed-certs=true
-kubectl config set-context dev-user-context --cluster=your-cluster-name --user=dev-user
-kubectl config use-context dev-user-context
-```
-
----
-
-## 12. Security Best Practices for Self-Managed Kubernetes
+## 11. Security Best Practices for Self-Managed Kubernetes
 
 - **Principle of Least Privilege:** Grant only the minimum permissions required.
 - **Regular Auditing:** Review RBAC policies regularly.
@@ -269,7 +300,7 @@ kubectl config use-context dev-user-context
 
 ---
 
-## 13. Additional Use Cases and Examples
+## 12. Additional Use Cases and Examples
 
 - **Developer Access:** Grant read-only access to pods in a namespace.
 - **Application-Specific Permissions:** Allow an app to update only its own ConfigMaps.
@@ -282,7 +313,7 @@ kubectl config use-context dev-user-context
 
 ---
 
-## 14. References
+## 13. References
 
 - [Kubernetes RBAC Documentation](https://kubernetes.io/docs/reference/access-authn-authz/rbac/)
 - [Kubernetes Service Accounts](https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/)
@@ -293,50 +324,4 @@ kubectl config use-context dev-user-context
 
 ---
 
-## Creating and Assigning Permissions to a User (e.g., jane) in Kubernetes (kubeadm)
 
-Kubernetes does not manage user accounts directly. For self-managed clusters, you must create a user identity using client certificates. Here is the correct sequence to create a user (e.g., `jane`), generate a certificate, approve it, and bind permissions using RBAC:
-
-### 1. Generate Private Key and CSR for User `jane`
-```bash
-openssl genrsa -out jane.key 2048
-openssl req -new -key jane.key -out jane.csr -subj "/CN=jane/O=devs"
-```
-
-### 2. Create Kubernetes CSR Object
-```bash
-cat <<EOF | kubectl apply -f -
-apiVersion: certificates.k8s.io/v1
-kind: CertificateSigningRequest
-metadata:
-  name: jane-csr
-spec:
-  request: $(cat jane.csr | base64 | tr -d '\n')
-  signerName: kubernetes.io/kube-apiserver-client
-  expirationSeconds: 86400
-  usages:
-  - client auth
-EOF
-```
-
-### 3. Approve the CSR and Get the Certificate
-```bash
-kubectl certificate approve jane-csr
-kubectl get csr jane-csr -o jsonpath='{.status.certificate}' | base64 -d > jane.crt
-```
-
-### 4. Configure kubectl Context for User `jane`
-```bash
-kubectl config set-credentials jane --client-certificate=jane.crt --client-key=jane.key --embed-certs=true
-kubectl config set-context jane-context --cluster=<your-cluster-name> --user=jane
-kubectl config use-context jane-context
-```
-> Replace `<your-cluster-name>` with your actual cluster name.
-
-### 5. Create the Role and RoleBinding (as in your YAML)
-```bash
-kubectl apply -f pod-reader-role.yaml
-kubectl apply -f pod-reader-rolebinding.yaml
-```
-
-This ensures the user `jane` exists as a valid Kubernetes client identity and is granted the correct permissions via RBAC.
