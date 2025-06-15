@@ -290,3 +290,53 @@ kubectl config use-context dev-user-context
 - [Pod Security Standards](https://kubernetes.io/docs/concepts/security/pod-security-standards/)
 - [Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/)
 - [Kubernetes Audit Logging](https://kubernetes.io/docs/tasks/debug/debug-cluster/audit/)
+
+---
+
+## Creating and Assigning Permissions to a User (e.g., jane) in Kubernetes (kubeadm)
+
+Kubernetes does not manage user accounts directly. For self-managed clusters, you must create a user identity using client certificates. Here is the correct sequence to create a user (e.g., `jane`), generate a certificate, approve it, and bind permissions using RBAC:
+
+### 1. Generate Private Key and CSR for User `jane`
+```bash
+openssl genrsa -out jane.key 2048
+openssl req -new -key jane.key -out jane.csr -subj "/CN=jane/O=devs"
+```
+
+### 2. Create Kubernetes CSR Object
+```bash
+cat <<EOF | kubectl apply -f -
+apiVersion: certificates.k8s.io/v1
+kind: CertificateSigningRequest
+metadata:
+  name: jane-csr
+spec:
+  request: $(cat jane.csr | base64 | tr -d '\n')
+  signerName: kubernetes.io/kube-apiserver-client
+  expirationSeconds: 86400
+  usages:
+  - client auth
+EOF
+```
+
+### 3. Approve the CSR and Get the Certificate
+```bash
+kubectl certificate approve jane-csr
+kubectl get csr jane-csr -o jsonpath='{.status.certificate}' | base64 -d > jane.crt
+```
+
+### 4. Configure kubectl Context for User `jane`
+```bash
+kubectl config set-credentials jane --client-certificate=jane.crt --client-key=jane.key --embed-certs=true
+kubectl config set-context jane-context --cluster=<your-cluster-name> --user=jane
+kubectl config use-context jane-context
+```
+> Replace `<your-cluster-name>` with your actual cluster name.
+
+### 5. Create the Role and RoleBinding (as in your YAML)
+```bash
+kubectl apply -f pod-reader-role.yaml
+kubectl apply -f pod-reader-rolebinding.yaml
+```
+
+This ensures the user `jane` exists as a valid Kubernetes client identity and is granted the correct permissions via RBAC.
