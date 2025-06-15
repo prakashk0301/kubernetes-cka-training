@@ -68,15 +68,17 @@ metadata:
 spec:
   affinity:
     nodeAffinity:
-      requiredDuringSchedulingIgnoredDuringExecution:
+      requiredDuringSchedulingIgnoredDuringExecution:    #hard condition
         nodeSelectorTerms:
-        - matchExpressions:
-          - key: disktype
-            operator: In
+        - matchExpressions:                               #actual condition that a nodes label's must meet      
+          - key: disktype                                 #this looks for a label on worker   
+            operator: In                                  #operation means the value of key (disktype)
+
             values:
             - ssd
-      preferredDuringSchedulingIgnoredDuringExecution:
-      - weight: 1
+      preferredDuringSchedulingIgnoredDuringExecution:   #soft rule, scheduler try to find a node that meets this condition, if it can's then pod will on any worker node that meets the required rule
+
+      - weight: 1                                           #the node with the highest score will be chosen
         preference:
           matchExpressions:
           - key: zone
@@ -87,6 +89,18 @@ spec:
   - name: nginx
     image: nginx
 ```
+
+Hard (requiredDuringSchedulingIgnoredDuringExecution) rules must be satisfied for a Pod to be scheduled.
+→ If these rules are not met, the Pod will not be scheduled.
+
+Soft (preferredDuringSchedulingIgnoredDuringExecution) rules are preferences.
+→ If possible, the scheduler tries to place the Pod on a node that satisfies these rules, but if not, the Pod can still be scheduled on any node that meets the required rules.
+
+You can define both required and preferred node affinity rules in the same Pod specification.
+
+You can define only required rules in a Pod manifest if you want strict control.
+
+You can define only preferred rules in a Pod manifest if you want flexible placement with preferences.
 
 ### 🔍 Description
 
