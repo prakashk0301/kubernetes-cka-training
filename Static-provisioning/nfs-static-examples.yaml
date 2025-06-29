@@ -1,0 +1,474 @@
+# NFS Static Provisioning with High Availability
+# This example demonstrates NFS static provisioning with multiple mount points
+# and failover capabilities
+
+---
+# NFS Server Configuration (External or in-cluster)
+# For external NFS server, ensure it's properly configured and accessible
+
+# If using in-cluster NFS server, first deploy:
+# kubectl apply -f nfs-server-deployment.yaml
+
+---
+# StorageClass for NFS
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nfs-static
+  labels:
+    storage-type: nfs
+    access-mode: multi-read-write
+provisioner: nfs.csi.k8s.io
+parameters:
+  # NFS CSI driver parameters
+  server: nfs-server.storage.svc.cluster.local  # or external IP
+  share: /exports/kubernetes
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
+allowVolumeExpansion: false
+mountOptions:
+  - hard
+  - nfsvers=4.1
+  - proto=tcp
+  - timeo=600
+  - retrans=2
+
+---
+# Primary NFS Static PV for shared application data
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: nfs-shared-data-pv
+  labels:
+    type: nfs
+    purpose: shared-data
+    tier: production
+spec:
+  capacity:
+    storage: 500Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+    - ReadOnlyMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: nfs-static
+  mountOptions:
+    - hard
+    - nfsvers=4.1
+    - proto=tcp
+    - timeo=600
+    - retrans=2
+  nfs:
+    server: 10.0.0.100  # Replace with your NFS server IP
+    path: /exports/kubernetes/shared-data
+    readOnly: false
+
+---
+# Secondary NFS PV for logs
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: nfs-logs-pv
+  labels:
+    type: nfs
+    purpose: logs
+    tier: production
+spec:
+  capacity:
+    storage: 200Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: nfs-static
+  mountOptions:
+    - hard
+    - nfsvers=4.1
+    - proto=tcp
+  nfs:
+    server: 10.0.0.100
+    path: /exports/kubernetes/logs
+    readOnly: false
+
+---
+# NFS PV for backups (read-only for most applications)
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: nfs-backups-pv
+  labels:
+    type: nfs
+    purpose: backups
+    tier: production
+spec:
+  capacity:
+    storage: 1Ti
+  volumeMode: Filesystem
+  accessModes:
+    - ReadOnlyMany
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: nfs-static
+  mountOptions:
+    - hard
+    - nfsvers=4.1
+    - proto=tcp
+  nfs:
+    server: 10.0.0.100
+    path: /exports/kubernetes/backups
+    readOnly: false
+
+---
+# PVC for shared application data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: shared-data-claim
+  namespace: production
+  labels:
+    app: multi-app
+    storage-type: shared
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 500Gi
+  storageClassName: nfs-static
+  selector:
+    matchLabels:
+      type: nfs
+      purpose: shared-data
+
+---
+# PVC for centralized logging
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: logs-claim
+  namespace: production
+  labels:
+    purpose: logging
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 200Gi
+  storageClassName: nfs-static
+  selector:
+    matchLabels:
+      type: nfs
+      purpose: logs
+
+---
+# PVC for backup access
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: backups-claim
+  namespace: production
+  labels:
+    purpose: backup-access
+spec:
+  accessModes:
+    - ReadOnlyMany
+  resources:
+    requests:
+      storage: 1Ti
+  storageClassName: nfs-static
+  selector:
+    matchLabels:
+      type: nfs
+      purpose: backups
+
+---
+# Web Application Deployment using shared NFS storage
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-app-nfs
+  namespace: production
+  labels:
+    app: web-app
+    storage: nfs
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: web-app
+  template:
+    metadata:
+      labels:
+        app: web-app
+    spec:
+      containers:
+      - name: web-app
+        image: nginx:1.25-alpine
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: shared-content
+          mountPath: /usr/share/nginx/html
+          subPath: web-content
+        - name: shared-uploads
+          mountPath: /usr/share/nginx/html/uploads
+          subPath: uploads
+        - name: app-logs
+          mountPath: /var/log/nginx
+          subPath: web-app
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+      volumes:
+      - name: shared-content
+        persistentVolumeClaim:
+          claimName: shared-data-claim
+      - name: shared-uploads
+        persistentVolumeClaim:
+          claimName: shared-data-claim
+      - name: app-logs
+        persistentVolumeClaim:
+          claimName: logs-claim
+
+---
+# File Processing Worker using shared storage
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: file-processor-nfs
+  namespace: production
+  labels:
+    app: file-processor
+    storage: nfs
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: file-processor
+  template:
+    metadata:
+      labels:
+        app: file-processor
+    spec:
+      containers:
+      - name: processor
+        image: busybox:1.36
+        command:
+        - /bin/sh
+        - -c
+        - |
+          while true; do
+            # Process files from uploads directory
+            find /data/uploads -name "*.txt" -exec echo "Processing {}" \;
+            # Move processed files to processed directory
+            find /data/uploads -name "*.txt" -exec mv {} /data/processed/ \;
+            # Log activity
+            echo "$(date): Processed batch of files" >> /logs/file-processor/activity.log
+            sleep 60
+          done
+        volumeMounts:
+        - name: shared-data
+          mountPath: /data
+        - name: processor-logs
+          mountPath: /logs/file-processor
+          subPath: file-processor
+        - name: backup-access
+          mountPath: /backups
+          readOnly: true
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+      volumes:
+      - name: shared-data
+        persistentVolumeClaim:
+          claimName: shared-data-claim
+      - name: processor-logs
+        persistentVolumeClaim:
+          claimName: logs-claim
+      - name: backup-access
+        persistentVolumeClaim:
+          claimName: backups-claim
+
+---
+# Log Aggregator using centralized logging storage
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: log-aggregator
+  namespace: production
+  labels:
+    app: log-aggregator
+spec:
+  selector:
+    matchLabels:
+      app: log-aggregator
+  template:
+    metadata:
+      labels:
+        app: log-aggregator
+    spec:
+      containers:
+      - name: fluentd
+        image: fluent/fluentd:v1.16-1
+        env:
+        - name: FLUENT_CONF
+          value: "fluent.conf"
+        volumeMounts:
+        - name: centralized-logs
+          mountPath: /fluentd/log
+        - name: fluentd-config
+          mountPath: /fluentd/etc
+        - name: varlog
+          mountPath: /var/log
+          readOnly: true
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+      volumes:
+      - name: centralized-logs
+        persistentVolumeClaim:
+          claimName: logs-claim
+      - name: fluentd-config
+        configMap:
+          name: fluentd-config
+      - name: varlog
+        hostPath:
+          path: /var/log
+
+---
+# Backup Cron Job
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backup-job
+  namespace: production
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: backup
+            image: alpine:3.18
+            command:
+            - /bin/sh
+            - -c
+            - |
+              apk add --no-cache rsync
+              DATE=$(date +%Y%m%d_%H%M%S)
+              BACKUP_DIR="/backups/daily_backup_$DATE"
+              mkdir -p "$BACKUP_DIR"
+              
+              # Backup shared data
+              echo "Starting backup of shared data..."
+              rsync -av /data/ "$BACKUP_DIR/data/"
+              
+              # Backup recent logs (last 7 days)
+              find /logs -type f -mtime -7 -exec cp --parents {} "$BACKUP_DIR/" \;
+              
+              # Create backup manifest
+              echo "Backup created on: $(date)" > "$BACKUP_DIR/backup_info.txt"
+              echo "Data size: $(du -sh /data | cut -f1)" >> "$BACKUP_DIR/backup_info.txt"
+              echo "Backup size: $(du -sh $BACKUP_DIR | cut -f1)" >> "$BACKUP_DIR/backup_info.txt"
+              
+              echo "Backup completed: $BACKUP_DIR"
+              
+              # Cleanup old backups (keep last 30 days)
+              find /backups -name "daily_backup_*" -type d -mtime +30 -exec rm -rf {} \;
+            volumeMounts:
+            - name: backup-storage
+              mountPath: /backups
+            - name: source-data
+              mountPath: /data
+              readOnly: true
+            - name: source-logs
+              mountPath: /logs
+              readOnly: true
+            resources:
+              requests:
+                memory: "256Mi"
+                cpu: "200m"
+              limits:
+                memory: "512Mi"
+                cpu: "1000m"
+          volumes:
+          - name: backup-storage
+            persistentVolumeClaim:
+              claimName: backups-claim
+          - name: source-data
+            persistentVolumeClaim:
+              claimName: shared-data-claim
+          - name: source-logs
+            persistentVolumeClaim:
+              claimName: logs-claim
+          restartPolicy: OnFailure
+
+---
+# Services
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-app-nfs-service
+  namespace: production
+spec:
+  selector:
+    app: web-app
+  ports:
+  - port: 80
+    targetPort: 80
+  type: LoadBalancer
+
+---
+# ConfigMap for Fluentd
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluentd-config
+  namespace: production
+data:
+  fluent.conf: |
+    <source>
+      @type tail
+      path /var/log/containers/*.log
+      pos_file /fluentd/log/containers.log.pos
+      tag kubernetes.*
+      format json
+      time_key time
+      time_format %Y-%m-%dT%H:%M:%S.%NZ
+    </source>
+    
+    <match kubernetes.**>
+      @type file
+      path /fluentd/log/kubernetes
+      append true
+      time_slice_format %Y%m%d
+      time_slice_wait 1m
+      buffer_type file
+      buffer_path /fluentd/log/kubernetes.buffer
+    </match>

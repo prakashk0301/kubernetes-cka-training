@@ -13,7 +13,7 @@ metadata:      # Metadata provides data about the object
 spec:          # Specifications of the Pod
   containers:
   - name: nginx        # Container name
-    image: nginx:1.14.2 # Docker image
+    image: nginx:1.25 # Docker image
     ports:
     - containerPort: 80 # Application port exposed by the container
 ```
@@ -34,11 +34,20 @@ The `apiVersion` field specifies the version of the Kubernetes API you're using 
 |-----------------------------|-------------------------|-------------------------------|
 | Pod                         | Pod                     | v1                            |
 | Deployment                  | Deployment              | apps/v1                       |
+| ReplicaSet                  | ReplicaSet              | apps/v1                       |
+| DaemonSet                   | DaemonSet               | apps/v1                       |
 | Service                     | Service                 | v1                            |
+| Job                         | Job                     | batch/v1                      |
+| CronJob                     | CronJob                 | batch/v1                      |
 | Ingress                     | Ingress                 | networking.k8s.io/v1          |
 | Role                        | Role                    | rbac.authorization.k8s.io/v1  |
+| ClusterRole                 | ClusterRole             | rbac.authorization.k8s.io/v1  |
 | ClusterRoleBinding          | ClusterRoleBinding      | rbac.authorization.k8s.io/v1  |
+| ServiceAccount              | ServiceAccount          | v1                            |
 | HorizontalPodAutoscaler     | HorizontalPodAutoscaler | autoscaling/v2                |
+| CustomResourceDefinition    | CustomResourceDefinition| apiextensions.k8s.io/v1       |
+| ResourceQuota               | ResourceQuota           | v1                            |
+| LimitRange                  | LimitRange              | v1                            |
 
 ## 🌐 Pod Networking and Services
 
@@ -72,9 +81,9 @@ While YAML manifests (declarative method) are highly recommended for production 
 kubectl run <pod-name> --image=<docker image name> [--port=<container-port>] [--labels="key1=value1,key2=value2"]
 
 # Example:
-kubectl run k21-nginx-pod --image=nginx:1.14.2 --port=80 --labels="app=nginx,env=dev"
+kubectl run k21-nginx-pod --image=nginx:1.25 --port=80 --labels="app=nginx,env=dev"
 ```
-This command creates a Pod named `k21-nginx-pod` using the `nginx:1.14.2` image, exposing port 80, and applying the labels `app=nginx` and `env=dev`.
+This command creates a Pod named `k21-nginx-pod` using the `nginx:1.25` image, exposing port 80, and applying the labels `app=nginx` and `env=dev`.
 
 ### Creating a Service Imperatively
 ```bash
@@ -161,7 +170,7 @@ Namespaces provide a way to divide cluster resources among multiple users or tea
   ```bash
   kubectl run <pod-name> --image=<docker image> -n <namespace>
   # Example:
-  kubectl run k21-pod-app2 --image=nginx:1.14.2 -n qa
+  kubectl run k21-pod-app2 --image=nginx:1.25 -n qa
   ```
 - **View Resources in a Specific Namespace:**
   ```bash

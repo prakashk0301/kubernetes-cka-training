@@ -2,6 +2,10 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: widgets.example.com
+  labels:
+    app.kubernetes.io/name: widget-crd
+    app.kubernetes.io/version: v1.0.0
+    app.kubernetes.io/component: custom-resource
 spec:
   group: example.com
   versions:
@@ -14,11 +18,80 @@ spec:
           properties:
             spec:
               type: object
+              required:
+                - size
+                - color
               properties:
                 size:
                   type: string
+                  enum: ["small", "medium", "large"]
+                  description: "Size of the widget"
                 color:
                   type: string
+                  pattern: "^(red|blue|green|yellow|purple|orange)$"
+                  description: "Color of the widget"
+                replicas:
+                  type: integer
+                  minimum: 1
+                  maximum: 10
+                  default: 1
+                  description: "Number of widget replicas"
+                enabled:
+                  type: boolean
+                  default: true
+                  description: "Whether the widget is enabled"
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: ["Pending", "Running", "Failed", "Succeeded"]
+                  description: "Current phase of the widget"
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                observedGeneration:
+                  type: integer
+                  description: "Most recent generation observed by the controller"
+      subresources:
+        status: {}
+        scale:
+          specReplicasPath: .spec.replicas
+          statusReplicasPath: .status.replicas
+      additionalPrinterColumns:
+        - name: Size
+          type: string
+          description: Widget size
+          jsonPath: .spec.size
+        - name: Color
+          type: string
+          description: Widget color
+          jsonPath: .spec.color
+        - name: Replicas
+          type: integer
+          description: Number of replicas
+          jsonPath: .spec.replicas
+        - name: Phase
+          type: string
+          description: Current phase
+          jsonPath: .status.phase
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
   scope: Namespaced
   names:
     plural: widgets
@@ -26,3 +99,6 @@ spec:
     kind: Widget
     shortNames:
     - wdgt
+    - widget
+    categories:
+    - all

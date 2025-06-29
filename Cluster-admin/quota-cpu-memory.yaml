@@ -2,9 +2,41 @@ apiVersion: v1
 kind: ResourceQuota
 metadata:
   name: cpu-and-mem
+  labels:
+    environment: production
+    quota-type: compute-resources
+  annotations:
+    description: "CPU and memory resource quota for namespace"
+    kubernetes.io/version: "1.32"
+    created-by: "cluster-admin"
 spec:
   hard:
-    requests.cpu: 400m
-    requests.memory: 200Mi
-    limits.cpu: 600m
-    limits.memory: 500Mi
+    # CPU Resources
+    requests.cpu: "2"
+    limits.cpu: "4"
+    
+    # Memory Resources  
+    requests.memory: 4Gi
+    limits.memory: 8Gi
+    
+    # Ephemeral Storage
+    requests.ephemeral-storage: 10Gi
+    limits.ephemeral-storage: 20Gi
+    
+    # Object Count Limits
+    pods: "20"
+    persistentvolumeclaims: "10"
+    services: "10"
+    secrets: "10"
+    configmaps: "10"
+    
+    # Extended Resources (example for GPU quotas)
+    # requests.nvidia.com/gpu: "2"
+    
+  # Optional: Scope to specific QoS classes
+  # scopes: ["NotTerminating"]  # Apply only to long-running pods
+  # scopeSelector:
+  #   matchExpressions:
+  #   - operator: In
+  #     scopeName: PriorityClass
+  #     values: ["high-priority"]

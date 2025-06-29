@@ -1,0 +1,81 @@
+# AWS EFS Dynamic Provisioning Example
+# Make sure to replace fs-xxxxxxxxx with your actual EFS File System ID
+
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: efs-sc
+provisioner: efs.csi.aws.com
+parameters:
+  provisioningMode: efs-ap
+  fileSystemId: fs-05ff8378afea6c10c  # REPLACE WITH YOUR EFS FILE SYSTEM ID
+  directoryPerms: "0755"
+  gidRangeStart: "1000"
+  gidRangeEnd: "2000"
+  basePath: "/dynamic_provisioning"
+  subPathPattern: "${.PVC.namespace}/${.PVC.name}"
+  ensureUniqueDirectory: "true"
+  reuseAccessPoint: "false"
+allowVolumeExpansion: true
+volumeBindingMode: Immediate
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: efs-claim
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: efs-sc
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: efs-writer
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: efs-writer
+  template:
+    metadata:
+      labels:
+        app: efs-writer
+    spec:
+      containers:
+      - name: writer
+        image: busybox:1.35
+        command: ["/bin/sh"]
+        args: ["-c", "while true; do echo $(hostname): $(date) >> /shared/data.log; sleep 30; done"]
+        volumeMounts:
+        - name: efs-storage
+          mountPath: /shared
+      volumes:
+      - name: efs-storage
+        persistentVolumeClaim:
+          claimName: efs-claim
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: efs-reader
+spec:
+  containers:
+  - name: reader
+    image: busybox:1.35
+    command: ["/bin/sh"]
+    args: ["-c", "while true; do tail -f /shared/data.log; sleep 10; done"]
+    volumeMounts:
+    - name: efs-storage
+      mountPath: /shared
+  volumes:
+  - name: efs-storage
+    persistentVolumeClaim:
+      claimName: efs-claim

@@ -1,0 +1,417 @@
+# Multi-Platform Static Provisioning Examples
+# This file contains complete examples for different cloud providers
+
+# =============================================================================
+# AWS EBS Static Provisioning Example
+# =============================================================================
+
+# Step 1: Create EBS volume using AWS CLI (run this first)
+# aws ec2 create-volume \
+#     --size 20 \
+#     --volume-type gp3 \
+#     --availability-zone us-west-2a \
+#     --tag-specifications 'ResourceType=volume,Tags=[{Key=Name,Value=k8s-production-db}]' \
+#     --encrypted
+
+---
+# AWS EBS Static PV
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: aws-ebs-static-pv
+  labels:
+    type: ebs
+    environment: production
+    storage-tier: ssd
+    backup-policy: daily
+spec:
+  capacity:
+    storage: 20Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: aws-ebs-static
+  csi:
+    driver: ebs.csi.aws.com
+    volumeHandle: vol-1234567890abcdef0  # Replace with actual EBS volume ID
+    fsType: ext4
+    volumeAttributes:
+      encrypted: "true"
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: topology.ebs.csi.aws.com/zone
+          operator: In
+          values:
+          - us-west-2a
+
+---
+# StorageClass for AWS EBS Static
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: aws-ebs-static
+provisioner: ebs.csi.aws.com
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+
+---
+# PVC for AWS EBS
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: aws-database-storage
+  namespace: production
+  labels:
+    app: postgresql
+    tier: database
+    backup: required
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+  storageClassName: aws-ebs-static
+  selector:
+    matchLabels:
+      type: ebs
+      environment: production
+
+---
+# PostgreSQL StatefulSet using AWS EBS
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgresql-aws
+  namespace: production
+  labels:
+    app: postgresql
+    platform: aws
+spec:
+  serviceName: postgresql-aws
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgresql
+      platform: aws
+  template:
+    metadata:
+      labels:
+        app: postgresql
+        platform: aws
+    spec:
+      containers:
+      - name: postgresql
+        image: postgres:15-alpine
+        env:
+        - name: POSTGRES_DB
+          value: "productiondb"
+        - name: POSTGRES_USER
+          value: "dbuser"
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-secret
+              key: password
+        - name: PGDATA
+          value: "/var/lib/postgresql/data/pgdata"
+        ports:
+        - containerPort: 5432
+        volumeMounts:
+        - name: database-storage
+          mountPath: /var/lib/postgresql/data
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - pg_isready -U dbuser -d productiondb
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - pg_isready -U dbuser -d productiondb
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+      volumes:
+      - name: database-storage
+        persistentVolumeClaim:
+          claimName: aws-database-storage
+
+---
+# =============================================================================
+# Azure Disk Static Provisioning Example
+# =============================================================================
+
+# Step 1: Create Azure Disk (run this first)
+# az disk create \
+#     --resource-group MC_myResourceGroup_myCluster_eastus \
+#     --name k8s-production-disk \
+#     --size-gb 50 \
+#     --sku Premium_LRS
+
+---
+# Azure Disk Static PV
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: azure-disk-static-pv
+  labels:
+    type: azure-disk
+    performance-tier: premium
+    environment: production
+spec:
+  capacity:
+    storage: 50Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: azure-disk-static
+  csi:
+    driver: disk.csi.azure.com
+    volumeHandle: /subscriptions/{subscription-id}/resourceGroups/MC_myResourceGroup_myCluster_eastus/providers/Microsoft.Compute/disks/k8s-production-disk
+    fsType: ext4
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: topology.disk.csi.azure.com/zone
+          operator: In
+          values:
+          - eastus-1
+
+---
+# PVC for Azure Disk
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: azure-app-storage
+  namespace: production
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi
+  storageClassName: azure-disk-static
+  selector:
+    matchLabels:
+      type: azure-disk
+      performance-tier: premium
+
+---
+# Application using Azure Disk
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: azure-app
+  namespace: production
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: azure-app
+  template:
+    metadata:
+      labels:
+        app: azure-app
+    spec:
+      containers:
+      - name: app
+        image: nginx:1.25-alpine
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: app-storage
+          mountPath: /usr/share/nginx/html
+        - name: logs
+          mountPath: /var/log/nginx
+      volumes:
+      - name: app-storage
+        persistentVolumeClaim:
+          claimName: azure-app-storage
+      - name: logs
+        emptyDir: {}
+
+---
+# =============================================================================
+# Google Cloud Persistent Disk Static Provisioning Example
+# =============================================================================
+
+# Step 1: Create GCE Persistent Disk (run this first)
+# gcloud compute disks create k8s-production-disk \
+#     --size=100GB \
+#     --zone=us-central1-a \
+#     --type=pd-ssd
+
+---
+# GCE Persistent Disk Static PV
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: gce-disk-static-pv
+  labels:
+    type: gce-pd
+    disk-type: ssd
+    environment: production
+spec:
+  capacity:
+    storage: 100Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: gce-disk-static
+  csi:
+    driver: pd.csi.storage.gke.io
+    volumeHandle: projects/{project-id}/zones/us-central1-a/disks/k8s-production-disk
+    fsType: ext4
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: topology.gke.io/zone
+          operator: In
+          values:
+          - us-central1-a
+
+---
+# PVC for GCE Disk
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gce-analytics-storage
+  namespace: production
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: gce-disk-static
+  selector:
+    matchLabels:
+      type: gce-pd
+      disk-type: ssd
+
+---
+# Elasticsearch using GCE Disk
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: elasticsearch-gce
+  namespace: production
+spec:
+  serviceName: elasticsearch
+  replicas: 1
+  selector:
+    matchLabels:
+      app: elasticsearch
+  template:
+    metadata:
+      labels:
+        app: elasticsearch
+    spec:
+      containers:
+      - name: elasticsearch
+        image: elasticsearch:8.11.0
+        ports:
+        - containerPort: 9200
+        - containerPort: 9300
+        env:
+        - name: discovery.type
+          value: single-node
+        - name: ES_JAVA_OPTS
+          value: "-Xms1g -Xmx1g"
+        volumeMounts:
+        - name: es-data
+          mountPath: /usr/share/elasticsearch/data
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1000m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+      volumes:
+      - name: es-data
+        persistentVolumeClaim:
+          claimName: gce-analytics-storage
+
+---
+# =============================================================================
+# Secrets for all examples
+# =============================================================================
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgresql-secret
+  namespace: production
+type: Opaque
+data:
+  password: cGFzc3dvcmQxMjM=  # base64 encoded 'password123'
+
+---
+# =============================================================================
+# Services
+# =============================================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgresql-aws-service
+  namespace: production
+spec:
+  selector:
+    app: postgresql
+    platform: aws
+  ports:
+  - port: 5432
+    targetPort: 5432
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: azure-app-service
+  namespace: production
+spec:
+  selector:
+    app: azure-app
+  ports:
+  - port: 80
+    targetPort: 80
+  type: LoadBalancer
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch-service
+  namespace: production
+spec:
+  selector:
+    app: elasticsearch
+  ports:
+  - port: 9200
+    targetPort: 9200
+    name: http
+  - port: 9300
+    targetPort: 9300
+    name: transport
+  type: ClusterIP

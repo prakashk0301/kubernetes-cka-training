@@ -1,0 +1,699 @@
+# Advanced Cluster Administration Patterns
+
+This file contains advanced patterns for cluster administration, security policies, admission control, and monitoring configurations for Kubernetes 1.32+.
+
+---
+# Example 1: Pod Security Standards Implementation
+
+# Namespace with Pod Security Standards
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: secure-namespace
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+    environment: production
+  annotations:
+    description: "Namespace with restricted Pod Security Standards"
+
+---
+# Example 2: Security Context - Restricted Pod
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: secure-pod
+  namespace: secure-namespace
+  labels:
+    app: secure-app
+    security: restricted
+spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    fsGroupChangePolicy: "OnRootMismatch"
+    seccompProfile:
+      type: RuntimeDefault
+    supplementalGroups: [1000]
+  containers:
+  - name: secure-container
+    image: nginx:1.25-alpine
+    ports:
+    - containerPort: 8080  # Non-privileged port
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      runAsNonRoot: true
+      runAsUser: 1000
+      runAsGroup: 1000
+      capabilities:
+        drop:
+        - ALL
+        add:
+        - NET_BIND_SERVICE
+      seccompProfile:
+        type: RuntimeDefault
+    resources:
+      requests:
+        memory: "128Mi"
+        cpu: "100m"
+      limits:
+        memory: "256Mi"
+        cpu: "500m"
+    volumeMounts:
+    - name: tmp
+      mountPath: /tmp
+    - name: var-cache
+      mountPath: /var/cache/nginx
+    - name: var-run
+      mountPath: /var/run
+    - name: config
+      mountPath: /etc/nginx/nginx.conf
+      subPath: nginx.conf
+      readOnly: true
+    env:
+    - name: NGINX_PORT
+      value: "8080"
+    livenessProbe:
+      httpGet:
+        path: /
+        port: 8080
+      initialDelaySeconds: 30
+      periodSeconds: 10
+    readinessProbe:
+      httpGet:
+        path: /
+        port: 8080
+      initialDelaySeconds: 5
+      periodSeconds: 5
+  volumes:
+  - name: tmp
+    emptyDir: {}
+  - name: var-cache
+    emptyDir: {}
+  - name: var-run
+    emptyDir: {}
+  - name: config
+    configMap:
+      name: nginx-secure-config
+  restartPolicy: Always
+  terminationGracePeriodSeconds: 30
+
+---
+# Example 3: Network Policy - Comprehensive Security
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: comprehensive-network-policy
+  namespace: secure-namespace
+spec:
+  podSelector:
+    matchLabels:
+      app: secure-app
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow traffic from pods with specific label
+  - from:
+    - podSelector:
+        matchLabels:
+          allowed: "true"
+    ports:
+    - protocol: TCP
+      port: 8080
+  # Allow traffic from specific namespace
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: frontend
+    ports:
+    - protocol: TCP
+      port: 8080
+  # Allow traffic from ingress controller
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 8080
+  egress:
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  # Allow HTTPS to external services
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+  # Allow database access
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: database
+    ports:
+    - protocol: TCP
+      port: 5432
+
+---
+# Example 4: RBAC - Service Account with Limited Permissions
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: limited-service-account
+  namespace: secure-namespace
+  annotations:
+    description: "Service account with limited cluster permissions"
+automountServiceAccountToken: false
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: secure-namespace
+  name: pod-reader
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "watch", "list"]
+- apiGroups: [""]
+  resources: ["pods/log"]
+  verbs: ["get"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get"]
+  resourceNames: ["app-config"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pod-reader-binding
+  namespace: secure-namespace
+subjects:
+- kind: ServiceAccount
+  name: limited-service-account
+  namespace: secure-namespace
+roleRef:
+  kind: Role
+  name: pod-reader
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Example 5: Admission Controller - Validating Webhook Configuration
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionWebhook
+metadata:
+  name: security-validation-webhook
+webhooks:
+- name: pod-security.example.com
+  clientConfig:
+    service:
+      name: security-webhook-service
+      namespace: webhook-system
+      path: "/validate-pods"
+  rules:
+  - operations: ["CREATE", "UPDATE"]
+    apiGroups: [""]
+    apiVersions: ["v1"]
+    resources: ["pods"]
+  failurePolicy: Fail
+  sideEffects: None
+  admissionReviewVersions: ["v1", "v1beta1"]
+  namespaceSelector:
+    matchLabels:
+      webhook-validation: "enabled"
+
+---
+# Example 6: Resource Monitoring and Alerting
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules
+  namespace: monitoring
+  labels:
+    app: prometheus
+data:
+  cluster-admin.rules: |
+    groups:
+    - name: cluster-admin.rules
+      rules:
+      # Resource Usage Alerts
+      - alert: HighCPUUsage
+        expr: (sum by (instance) (rate(container_cpu_usage_seconds_total[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage detected"
+          description: "CPU usage is above 80% for more than 5 minutes on {{ $labels.instance }}"
+      
+      - alert: HighMemoryUsage
+        expr: (sum by (instance) (container_memory_working_set_bytes) / sum by (instance) (machine_memory_bytes)) * 100 > 90
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High memory usage detected"
+          description: "Memory usage is above 90% for more than 5 minutes on {{ $labels.instance }}"
+      
+      # Quota Violations
+      - alert: ResourceQuotaExceeded
+        expr: kube_resourcequota{type="used"} / kube_resourcequota{type="hard"} > 0.9
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Resource quota nearly exceeded"
+          description: "Resource quota {{ $labels.resource }} in namespace {{ $labels.namespace }} is {{ $value | humanizePercentage }} full"
+      
+      # Pod Evictions
+      - alert: PodEvicted
+        expr: increase(kube_pod_status_reason{reason="Evicted"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pod evicted"
+          description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} has been evicted"
+      
+      # Node Conditions
+      - alert: NodeNotReady
+        expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Node not ready"
+          description: "Node {{ $labels.node }} has been not ready for more than 5 minutes"
+      
+      - alert: NodeDiskPressure
+        expr: kube_node_status_condition{condition="DiskPressure",status="true"} == 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Node disk pressure"
+          description: "Node {{ $labels.node }} is experiencing disk pressure"
+
+---
+# Example 7: Custom Resource Definition for Cluster Policies
+
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: clusterpolicies.admin.example.com
+spec:
+  group: admin.example.com
+  versions:
+  - name: v1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              resourceQuota:
+                type: object
+                properties:
+                  enabled:
+                    type: boolean
+                  limits:
+                    type: object
+                    properties:
+                      cpu:
+                        type: string
+                      memory:
+                        type: string
+                      storage:
+                        type: string
+              networkPolicy:
+                type: object
+                properties:
+                  enabled:
+                    type: boolean
+                  defaultDeny:
+                    type: boolean
+              podSecurityPolicy:
+                type: object
+                properties:
+                  enabled:
+                    type: boolean
+                  profile:
+                    type: string
+                    enum: ["privileged", "baseline", "restricted"]
+          status:
+            type: object
+            properties:
+              applied:
+                type: boolean
+              lastApplied:
+                type: string
+              conditions:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type:
+                      type: string
+                    status:
+                      type: string
+                    reason:
+                      type: string
+                    message:
+                      type: string
+  scope: Namespaced
+  names:
+    plural: clusterpolicies
+    singular: clusterpolicy
+    kind: ClusterPolicy
+    shortNames:
+    - cp
+
+---
+# Example 8: Cluster Policy Instance
+
+apiVersion: admin.example.com/v1
+kind: ClusterPolicy
+metadata:
+  name: production-policy
+  namespace: secure-namespace
+spec:
+  resourceQuota:
+    enabled: true
+    limits:
+      cpu: "4"
+      memory: "8Gi"
+      storage: "100Gi"
+  networkPolicy:
+    enabled: true
+    defaultDeny: true
+  podSecurityPolicy:
+    enabled: true
+    profile: "restricted"
+
+---
+# Example 9: Horizontal Pod Autoscaler with Custom Metrics
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: advanced-hpa
+  namespace: secure-namespace
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: secure-app-deployment
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+  # CPU utilization
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  # Memory utilization
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  # Custom metric - requests per second
+  - type: Pods
+    pods:
+      metric:
+        name: http_requests_per_second
+      target:
+        type: AverageValue
+        averageValue: "1k"
+  # External metric - queue length
+  - type: External
+    external:
+      metric:
+        name: queue_length
+        selector:
+          matchLabels:
+            queue: "work-queue"
+      target:
+        type: Value
+        value: "10"
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+      selectPolicy: Min
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 15
+      - type: Pods
+        value: 4
+        periodSeconds: 15
+      selectPolicy: Max
+
+---
+# Example 10: Vertical Pod Autoscaler
+
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: secure-app-vpa
+  namespace: secure-namespace
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: secure-app-deployment
+  updatePolicy:
+    updateMode: "Auto"  # Auto, Initial, Off
+  resourcePolicy:
+    containerPolicies:
+    - containerName: secure-container
+      minAllowed:
+        cpu: 100m
+        memory: 50Mi
+      maxAllowed:
+        cpu: 2
+        memory: 2Gi
+      controlledResources: ["cpu", "memory"]
+      controlledValues: RequestsAndLimits
+
+---
+# Example 11: Pod Disruption Budget with Multiple Selectors
+
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: multi-tier-pdb
+  namespace: secure-namespace
+spec:
+  minAvailable: 50%
+  selector:
+    matchLabels:
+      tier: frontend
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: critical-app-pdb
+  namespace: secure-namespace
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: critical-app
+      tier: backend
+
+---
+# Example 12: Cluster-wide Resource Management
+
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: cluster-wide-limits
+  namespace: kube-system
+spec:
+  limits:
+  # Default limits for system pods
+  - type: Container
+    default:
+      cpu: "200m"
+      memory: "256Mi"
+    defaultRequest:
+      cpu: "100m"
+      memory: "128Mi"
+    min:
+      cpu: "50m"
+      memory: "64Mi"
+    max:
+      cpu: "2"
+      memory: "4Gi"
+
+---
+# Example 13: Resource Lock-down for Critical Namespaces
+
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: system-resource-lock
+  namespace: kube-system
+spec:
+  hard:
+    # Prevent resource exhaustion in system namespace
+    requests.cpu: "10"
+    requests.memory: 20Gi
+    limits.cpu: "20"
+    limits.memory: 40Gi
+    pods: "100"
+    persistentvolumeclaims: "20"
+
+---
+# Example 14: Emergency Pod for Cluster Debugging
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: debug-pod
+  namespace: kube-system
+  labels:
+    app: debug-tools
+    purpose: troubleshooting
+spec:
+  priorityClassName: system-cluster-critical
+  containers:
+  - name: debug-tools
+    image: nicolaka/netshoot:v0.11
+    command: ["sleep", "3600"]
+    securityContext:
+      capabilities:
+        add:
+        - NET_ADMIN
+        - SYS_ADMIN
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
+    volumeMounts:
+    - name: host-root
+      mountPath: /host
+      readOnly: true
+    - name: proc
+      mountPath: /host/proc
+      readOnly: true
+    - name: sys
+      mountPath: /host/sys
+      readOnly: true
+  volumes:
+  - name: host-root
+    hostPath:
+      path: /
+  - name: proc
+    hostPath:
+      path: /proc
+  - name: sys
+    hostPath:
+      path: /sys
+  hostNetwork: true
+  hostPID: true
+  restartPolicy: Never
+  tolerations:
+  - operator: Exists
+    effect: NoSchedule
+  - operator: Exists
+    effect: NoExecute
+
+---
+# Example 15: Comprehensive Monitoring Dashboard Config
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-admin-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  cluster-admin-dashboard.json: |
+    {
+      "dashboard": {
+        "title": "Cluster Administration Dashboard",
+        "panels": [
+          {
+            "title": "Resource Utilization",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "sum(rate(container_cpu_usage_seconds_total[5m])) by (node)",
+                "legendFormat": "CPU Usage - {{node}}"
+              },
+              {
+                "expr": "sum(container_memory_working_set_bytes) by (node) / sum(machine_memory_bytes) by (node)",
+                "legendFormat": "Memory Usage - {{node}}"
+              }
+            ]
+          },
+          {
+            "title": "Pod Status",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "sum(kube_pod_status_phase{phase=\"Running\"})",
+                "legendFormat": "Running Pods"
+              },
+              {
+                "expr": "sum(kube_pod_status_phase{phase=\"Pending\"})",
+                "legendFormat": "Pending Pods"
+              },
+              {
+                "expr": "sum(kube_pod_status_phase{phase=\"Failed\"})",
+                "legendFormat": "Failed Pods"
+              }
+            ]
+          },
+          {
+            "title": "Resource Quota Usage",
+            "type": "bargauge",
+            "targets": [
+              {
+                "expr": "kube_resourcequota{type=\"used\"} / kube_resourcequota{type=\"hard\"}",
+                "legendFormat": "{{namespace}} - {{resource}}"
+              }
+            ]
+          }
+        ]
+      }
+    }

@@ -1,0 +1,633 @@
+# Local Storage Static Provisioning Examples
+# This demonstrates various local storage scenarios including 
+# high-performance applications and edge computing use cases
+
+---
+# StorageClass for Local Storage
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: local-storage
+  labels:
+    storage-type: local
+    performance: high
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Retain
+
+---
+# Local PV for High-Performance Database (NVMe SSD)
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: local-nvme-db-pv
+  labels:
+    type: local
+    performance-tier: nvme
+    node: worker-node-1
+    usage: database
+spec:
+  capacity:
+    storage: 1Ti
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-storage
+  local:
+    path: /mnt/nvme-ssd/database
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+          - worker-node-1
+
+---
+# Local PV for Cache (High-speed storage)
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: local-cache-pv
+  labels:
+    type: local
+    performance-tier: high
+    node: worker-node-2
+    usage: cache
+spec:
+  capacity:
+    storage: 500Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-storage
+  local:
+    path: /mnt/ssd/cache
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+          - worker-node-2
+
+---
+# Local PV for Logs (Standard SSD)
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: local-logs-pv
+  labels:
+    type: local
+    performance-tier: standard
+    node: worker-node-3
+    usage: logs
+spec:
+  capacity:
+    storage: 2Ti
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-storage
+  local:
+    path: /mnt/storage/logs
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+          - worker-node-3
+
+---
+# Local PV for ML Model Storage (Edge Node)
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: local-ml-models-pv
+  labels:
+    type: local
+    performance-tier: standard
+    node: edge-node-1
+    usage: ml-models
+    edge-location: "true"
+spec:
+  capacity:
+    storage: 100Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-storage
+  local:
+    path: /mnt/models
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+          - edge-node-1
+        - key: node-type
+          operator: In
+          values:
+          - edge
+
+---
+# PVC for High-Performance Database
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: database-storage-claim
+  namespace: production
+  labels:
+    app: postgresql
+    performance: high
+    tier: database
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Ti
+  storageClassName: local-storage
+  selector:
+    matchLabels:
+      type: local
+      performance-tier: nvme
+      usage: database
+
+---
+# PVC for Redis Cache
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cache-storage-claim
+  namespace: production
+  labels:
+    app: redis
+    performance: high
+    tier: cache
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 500Gi
+  storageClassName: local-storage
+  selector:
+    matchLabels:
+      type: local
+      performance-tier: high
+      usage: cache
+
+---
+# PVC for Log Storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: logs-storage-claim
+  namespace: production
+  labels:
+    purpose: logging
+    performance: standard
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Ti
+  storageClassName: local-storage
+  selector:
+    matchLabels:
+      type: local
+      usage: logs
+
+---
+# PVC for ML Models (Edge)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ml-models-claim
+  namespace: edge-computing
+  labels:
+    app: ml-inference
+    location: edge
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: local-storage
+  selector:
+    matchLabels:
+      type: local
+      usage: ml-models
+      edge-location: "true"
+
+---
+# High-Performance PostgreSQL StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgresql-local
+  namespace: production
+  labels:
+    app: postgresql
+    storage: local-nvme
+spec:
+  serviceName: postgresql-local
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgresql
+      storage: local-nvme
+  template:
+    metadata:
+      labels:
+        app: postgresql
+        storage: local-nvme
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: worker-node-1
+      containers:
+      - name: postgresql
+        image: postgres:15-alpine
+        env:
+        - name: POSTGRES_DB
+          value: "highperf_db"
+        - name: POSTGRES_USER
+          value: "dbuser"
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-secret
+              key: password
+        - name: PGDATA
+          value: "/var/lib/postgresql/data/pgdata"
+        - name: POSTGRES_SHARED_PRELOAD_LIBRARIES
+          value: "pg_stat_statements"
+        - name: POSTGRES_MAX_CONNECTIONS
+          value: "200"
+        - name: POSTGRES_SHARED_BUFFERS
+          value: "256MB"
+        - name: POSTGRES_EFFECTIVE_CACHE_SIZE
+          value: "1GB"
+        ports:
+        - containerPort: 5432
+        volumeMounts:
+        - name: database-storage
+          mountPath: /var/lib/postgresql/data
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - pg_isready -U dbuser -d highperf_db
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - pg_isready -U dbuser -d highperf_db
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "2000m"
+          limits:
+            memory: "4Gi"
+            cpu: "4000m"
+      volumes:
+      - name: database-storage
+        persistentVolumeClaim:
+          claimName: database-storage-claim
+
+---
+# High-Performance Redis Cache
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-local
+  namespace: production
+  labels:
+    app: redis
+    storage: local-ssd
+spec:
+  serviceName: redis-local
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+      storage: local-ssd
+  template:
+    metadata:
+      labels:
+        app: redis
+        storage: local-ssd
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: worker-node-2
+      containers:
+      - name: redis
+        image: redis:7-alpine
+        command:
+        - redis-server
+        - /etc/redis/redis.conf
+        ports:
+        - containerPort: 6379
+        volumeMounts:
+        - name: cache-storage
+          mountPath: /data
+        - name: redis-config
+          mountPath: /etc/redis
+        livenessProbe:
+          tcpSocket:
+            port: 6379
+          initialDelaySeconds: 30
+          periodSeconds: 5
+        readinessProbe:
+          exec:
+            command:
+            - redis-cli
+            - ping
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "1000m"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+      volumes:
+      - name: cache-storage
+        persistentVolumeClaim:
+          claimName: cache-storage-claim
+      - name: redis-config
+        configMap:
+          name: redis-config
+
+---
+# Elasticsearch for Logs with Local Storage
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: elasticsearch-local
+  namespace: production
+  labels:
+    app: elasticsearch
+    storage: local-standard
+spec:
+  serviceName: elasticsearch-local
+  replicas: 1
+  selector:
+    matchLabels:
+      app: elasticsearch
+      storage: local-standard
+  template:
+    metadata:
+      labels:
+        app: elasticsearch
+        storage: local-standard
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: worker-node-3
+      containers:
+      - name: elasticsearch
+        image: elasticsearch:8.11.0
+        env:
+        - name: discovery.type
+          value: single-node
+        - name: ES_JAVA_OPTS
+          value: "-Xms2g -Xmx2g"
+        - name: xpack.security.enabled
+          value: "false"
+        ports:
+        - containerPort: 9200
+        - containerPort: 9300
+        volumeMounts:
+        - name: logs-storage
+          mountPath: /usr/share/elasticsearch/data
+        livenessProbe:
+          httpGet:
+            path: /_cluster/health
+            port: 9200
+          initialDelaySeconds: 60
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /_cluster/health
+            port: 9200
+          initialDelaySeconds: 30
+          periodSeconds: 5
+        resources:
+          requests:
+            memory: "3Gi"
+            cpu: "1500m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+      volumes:
+      - name: logs-storage
+        persistentVolumeClaim:
+          claimName: logs-storage-claim
+
+---
+# ML Inference Service (Edge Computing)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ml-inference-edge
+  namespace: edge-computing
+  labels:
+    app: ml-inference
+    location: edge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ml-inference
+      location: edge
+  template:
+    metadata:
+      labels:
+        app: ml-inference
+        location: edge
+    spec:
+      nodeSelector:
+        node-type: edge
+        kubernetes.io/hostname: edge-node-1
+      containers:
+      - name: ml-service
+        image: tensorflow/serving:2.13.0
+        env:
+        - name: MODEL_NAME
+          value: "image_classifier"
+        - name: MODEL_BASE_PATH
+          value: "/models/image_classifier"
+        ports:
+        - containerPort: 8501
+          name: http
+        - containerPort: 8500
+          name: grpc
+        volumeMounts:
+        - name: ml-models
+          mountPath: /models
+          readOnly: true
+        livenessProbe:
+          httpGet:
+            path: /v1/models/image_classifier
+            port: 8501
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /v1/models/image_classifier
+            port: 8501
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1000m"
+            nvidia.com/gpu: 1
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+            nvidia.com/gpu: 1
+      volumes:
+      - name: ml-models
+        persistentVolumeClaim:
+          claimName: ml-models-claim
+
+---
+# Services
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgresql-local-service
+  namespace: production
+spec:
+  selector:
+    app: postgresql
+    storage: local-nvme
+  ports:
+  - port: 5432
+    targetPort: 5432
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-local-service
+  namespace: production
+spec:
+  selector:
+    app: redis
+    storage: local-ssd
+  ports:
+  - port: 6379
+    targetPort: 6379
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch-local-service
+  namespace: production
+spec:
+  selector:
+    app: elasticsearch
+    storage: local-standard
+  ports:
+  - port: 9200
+    targetPort: 9200
+    name: http
+  - port: 9300
+    targetPort: 9300
+    name: transport
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ml-inference-service
+  namespace: edge-computing
+spec:
+  selector:
+    app: ml-inference
+    location: edge
+  ports:
+  - port: 8501
+    targetPort: 8501
+    name: http
+  - port: 8500
+    targetPort: 8500
+    name: grpc
+  type: LoadBalancer
+
+---
+# ConfigMaps
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-config
+  namespace: production
+data:
+  redis.conf: |
+    # Redis configuration for high performance
+    save 900 1
+    save 300 10
+    save 60 10000
+    
+    # Memory and performance
+    maxmemory 1gb
+    maxmemory-policy allkeys-lru
+    
+    # Persistence
+    dir /data
+    dbfilename dump.rdb
+    
+    # Network
+    tcp-keepalive 300
+    timeout 0
+    
+    # Logging
+    loglevel notice
+    logfile ""
+
+---
+# Secrets
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgresql-secret
+  namespace: production
+type: Opaque
+data:
+  password: UG9zdGdyZXNRTDEyMw==  # base64 encoded 'PostgresQL123'
+
+---
+# Namespace for edge computing
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: edge-computing
+  labels:
+    type: edge
+    location: remote

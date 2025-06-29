@@ -2,15 +2,101 @@ apiVersion: v1
 kind: Pod
 metadata:
   name: qos-burstable
+  labels:
+    app: qos-demo
+    qos-class: burstable
+    tier: development
+  annotations:
+    description: "Pod with Burstable QoS class - has resource requests but limits are higher or different"
+    kubernetes.io/version: "1.32"
 spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
   containers:
-  - image: busybox
-    args: ["sleep", "9999999"]
-    name: main
+  - image: nginx:1.25-alpine
+    name: web-server
+    ports:
+    - containerPort: 8080
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      runAsNonRoot: true
+      runAsUser: 1000
+      capabilities:
+        drop:
+        - ALL
+        add:
+        - NET_BIND_SERVICE
     resources:
       requests:
         cpu: 100m
-  - image: busybox
-    args: ["sleep", "9999999"]
+        memory: 128Mi
+        ephemeral-storage: 256Mi
+      limits:
+        cpu: 500m        # Limits > Requests = Burstable QoS
+        memory: 512Mi    # Limits > Requests = Burstable QoS  
+        ephemeral-storage: 1Gi
+    env:
+    - name: QOS_CLASS
+      value: "Burstable"
+    - name: NGINX_PORT
+      value: "8080"
+    - name: CONTAINER_NAME
+      value: "web-server"
+    volumeMounts:
+    - name: tmp
+      mountPath: /tmp
+    - name: var-cache
+      mountPath: /var/cache/nginx
+    - name: var-run
+      mountPath: /var/run
+    livenessProbe:
+      httpGet:
+        path: /
+        port: 8080
+      initialDelaySeconds: 30
+      periodSeconds: 10
+    readinessProbe:
+      httpGet:
+        path: /
+        port: 8080
+      initialDelaySeconds: 5
+      periodSeconds: 5
+  - image: busybox:1.36
+    args: ["sleep", "300"]
     name: sidecar
-  terminationGracePeriodSeconds: 0
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      runAsNonRoot: true
+      runAsUser: 1000
+      capabilities:
+        drop:
+        - ALL
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      # No limits specified = Burstable QoS (since pod has some requests)
+    env:
+    - name: QOS_CLASS
+      value: "Burstable"
+    - name: CONTAINER_NAME
+      value: "sidecar"
+    volumeMounts:
+    - name: tmp
+      mountPath: /tmp
+  volumes:
+  - name: tmp
+    emptyDir: {}
+  - name: var-cache
+    emptyDir: {}
+  - name: var-run
+    emptyDir: {}
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 30

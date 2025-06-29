@@ -1,7 +1,14 @@
 
 # 🚀 Kubernetes Deployments, Rollouts, HPA and Their Relationship with Pods
 
-## 📌 Limitations of Standalone Pods
+## 📌 Limitations of Stan        app: nginx-hpa
+        cloud: aws
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.25
+        ports:
+        - containerPort: 80ods
 
 While Pods are the smallest deployable units in Kubernetes, using them directly has several limitations:
 1. **No Replica Management**: You cannot define replica count in a Pod manifest.
@@ -43,7 +50,7 @@ spec:
     spec:
       containers:
       - name: nginx
-        image: nginx:1.14.2
+        image: nginx:1.25
         ports:
         - containerPort: 80
 ---

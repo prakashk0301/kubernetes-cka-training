@@ -1,0 +1,73 @@
+# Basic ConfigMap Example - Simple Key-Value Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: basic-app-config
+  namespace: default
+  labels:
+    app: demo-app
+    component: configuration
+    version: v1.0.0
+data:
+  # Simple application settings
+  APP_NAME: "Demo Application"
+  APP_VERSION: "1.0.0"
+  APP_ENV: "development"
+  LOG_LEVEL: "info"
+  DEBUG_MODE: "false"
+  
+  # Database configuration (non-sensitive)
+  DB_HOST: "localhost"
+  DB_PORT: "5432"
+  DB_NAME: "demo_db"
+  DB_TIMEOUT: "30s"
+  DB_MAX_CONNECTIONS: "10"
+  
+  # Cache settings
+  CACHE_ENABLED: "true"
+  CACHE_TTL: "3600"
+  CACHE_SIZE: "100MB"
+  
+  # API configuration
+  API_RATE_LIMIT: "1000"
+  API_TIMEOUT: "10s"
+  API_VERSION: "v1"
+
+---
+# Pod using the basic ConfigMap via environment variables
+apiVersion: v1
+kind: Pod
+metadata:
+  name: basic-configmap-pod
+  labels:
+    app: demo-app
+spec:
+  containers:
+  - name: demo-container
+    image: busybox:1.35
+    command: ["/bin/sh"]
+    args: ["-c", "while true; do echo 'App: $APP_NAME v$APP_VERSION ($APP_ENV)'; echo 'DB: $DB_HOST:$DB_PORT/$DB_NAME'; echo 'Cache: $CACHE_ENABLED (TTL: $CACHE_TTL)'; sleep 30; done"]
+    envFrom:
+    - configMapRef:
+        name: basic-app-config
+    resources:
+      requests:
+        memory: "64Mi"
+        cpu: "250m"
+      limits:
+        memory: "128Mi"
+        cpu: "500m"
+
+---
+# Service for the pod
+apiVersion: v1
+kind: Service
+metadata:
+  name: basic-demo-service
+spec:
+  selector:
+    app: demo-app
+  ports:
+  - port: 8080
+    targetPort: 8080
+  type: ClusterIP

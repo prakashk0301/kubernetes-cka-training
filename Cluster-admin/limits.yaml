@@ -1,34 +1,89 @@
 apiVersion: v1
 kind: LimitRange
 metadata:
-  name: example
+  name: comprehensive-limits
+  labels:
+    environment: production
+    limit-type: comprehensive
+  annotations:
+    description: "Comprehensive limit range with defaults, minimums, and maximums"
+    kubernetes.io/version: "1.32"
+    created-by: "cluster-admin"
 spec:
   limits:
+  # Pod-level limits (aggregate of all containers in pod)
   - type: Pod
     min:
-      cpu: 50m
-      memory: 5Mi
+      cpu: 100m
+      memory: 128Mi
+      ephemeral-storage: 256Mi
     max:
-      cpu: 1
-      memory: 1Gi
+      cpu: "8"
+      memory: 16Gi
+      ephemeral-storage: 20Gi
+  
+  # Container-level limits
   - type: Container
+    # Default limits (applied if not specified)
+    default:
+      cpu: 500m
+      memory: 512Mi
+      ephemeral-storage: 1Gi
+    # Default requests (applied if not specified) 
     defaultRequest:
       cpu: 100m
-      memory: 10Mi
-    default:
-      cpu: 200m
-      memory: 100Mi
+      memory: 128Mi
+      ephemeral-storage: 256Mi
+    # Minimum allowed values
     min:
       cpu: 50m
-      memory: 5Mi
+      memory: 64Mi
+      ephemeral-storage: 128Mi
+    # Maximum allowed values
     max:
-      cpu: 1
-      memory: 1Gi
+      cpu: "4"
+      memory: 8Gi
+      ephemeral-storage: 10Gi
+    # Ratio constraints (limits/requests ratios)
     maxLimitRequestRatio:
-      cpu: 4
-      memory: 10
+      cpu: 10        # Limits can be up to 10x requests
+      memory: 8      # Limits can be up to 8x requests
+      ephemeral-storage: 4  # Limits can be up to 4x requests
+  
+  # PersistentVolumeClaim limits
   - type: PersistentVolumeClaim
     min:
       storage: 1Gi
     max:
-      storage: 10Gi
+      storage: 100Gi
+    # Default storage class can be specified here if needed
+    # defaultStorageClass: "fast-ssd"
+
+---
+# Additional LimitRange for InitContainers (if different limits needed)
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: init-container-limits
+  labels:
+    environment: production
+    limit-type: init-containers
+spec:
+  limits:
+  - type: Container
+    default:
+      cpu: 200m
+      memory: 256Mi
+      ephemeral-storage: 512Mi
+    defaultRequest:
+      cpu: 50m
+      memory: 64Mi
+      ephemeral-storage: 128Mi
+    min:
+      cpu: 25m
+      memory: 32Mi
+      ephemeral-storage: 64Mi
+    max:
+      cpu: "1"
+      memory: 1Gi
+      ephemeral-storage: 2Gi

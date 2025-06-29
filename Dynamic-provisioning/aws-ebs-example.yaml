@@ -1,0 +1,62 @@
+# AWS EBS Dynamic Provisioning Example
+
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ebs-gp3-sc
+provisioner: ebs.csi.aws.com
+parameters:
+  type: gp3                    # Volume type
+  fsType: ext4                 # File system
+  encrypted: "true"            # Enable encryption
+  iops: "3000"                # IOPS for gp3 volumes
+  throughput: "125"           # Throughput in MiB/s for gp3
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+reclaimPolicy: Delete
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ebs-claim
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ebs-gp3-sc
+  resources:
+    requests:
+      storage: 20Gi
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-with-ebs
+spec:
+  containers:
+  - name: nginx
+    image: nginx:1.25
+    ports:
+    - containerPort: 80
+    volumeMounts:
+    - name: www-storage
+      mountPath: /usr/share/nginx/html
+  volumes:
+  - name: www-storage
+    persistentVolumeClaim:
+      claimName: ebs-claim
+
+---
+# Service to access the nginx pod
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-ebs-service
+spec:
+  selector:
+    app: nginx-with-ebs
+  ports:
+  - port: 80
+    targetPort: 80
+  type: NodePort

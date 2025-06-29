@@ -2,12 +2,66 @@ apiVersion: v1
 kind: Pod
 metadata:
   name: qos-besteffort
+  labels:
+    app: qos-demo
+    qos-class: besteffort
+    tier: testing
+  annotations:
+    description: "Pod with BestEffort QoS class - no resource requests or limits defined"
+    kubernetes.io/version: "1.32"
 spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
   containers:
-  - image: busybox
-    args: ["sleep", "9999999"]
+  - image: busybox:1.36
+    args: ["sh", "-c", "while true; do echo 'BestEffort QoS - no resource guarantees'; sleep 30; done"]
     name: main
-  - image: busybox
-    args: ["sleep", "9999999"]
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      runAsNonRoot: true
+      runAsUser: 1000
+      capabilities:
+        drop:
+        - ALL
+    # No resources section = BestEffort QoS
+    env:
+    - name: QOS_CLASS
+      value: "BestEffort"
+    - name: CONTAINER_NAME
+      value: "main"
+    - name: MESSAGE
+      value: "Running with BestEffort QoS - lowest priority"
+    volumeMounts:
+    - name: tmp
+      mountPath: /tmp
+  - image: alpine:3.18
+    args: ["sh", "-c", "while true; do echo 'BestEffort sidecar container'; sleep 45; done"]
     name: sidecar
-  terminationGracePeriodSeconds: 0
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      runAsNonRoot: true
+      runAsUser: 1000
+      capabilities:
+        drop:
+        - ALL
+    # No resources for this container either = BestEffort QoS
+    env:
+    - name: QOS_CLASS
+      value: "BestEffort"
+    - name: CONTAINER_NAME
+      value: "sidecar"
+    volumeMounts:
+    - name: tmp
+      mountPath: /tmp
+  volumes:
+  - name: tmp
+    emptyDir: {}
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 30

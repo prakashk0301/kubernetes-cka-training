@@ -1,0 +1,53 @@
+# Local Path Dynamic Provisioning Example
+# This works for local/on-premises clusters
+
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: local-path
+provisioner: rancher.io/local-path
+parameters:
+  nodePath: /opt/local-path-provisioner
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: local-claim
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: local-test-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: local-test
+  template:
+    metadata:
+      labels:
+        app: local-test
+    spec:
+      containers:
+      - name: app
+        image: busybox:1.35
+        command: ["/bin/sh"]
+        args: ["-c", "while true; do echo $(date) >> /data/log.txt; echo 'Data written to local volume'; sleep 60; done"]
+        volumeMounts:
+        - name: local-storage
+          mountPath: /data
+      volumes:
+      - name: local-storage
+        persistentVolumeClaim:
+          claimName: local-claim

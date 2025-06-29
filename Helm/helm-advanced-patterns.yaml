@@ -1,0 +1,826 @@
+# Helm Advanced Usage Patterns and Real-World Examples
+
+This file demonstrates advanced Helm patterns, production configurations, and complex deployment scenarios.
+
+---
+# Example 1: Multi-Environment Values Structure
+
+# values-development.yaml
+global:
+  environment: development
+  imageRegistry: dev-registry.example.com
+  domain: dev.example.com
+
+replicaCount: 1
+
+image:
+  tag: "develop"
+  pullPolicy: Always
+
+resources:
+  requests:
+    memory: "128Mi"
+    cpu: "100m"
+  limits:
+    memory: "256Mi"
+    cpu: "500m"
+
+database:
+  enabled: true
+  size: "1Gi"
+  
+monitoring:
+  enabled: false
+
+security:
+  networkPolicy:
+    enabled: false
+
+---
+# values-staging.yaml
+global:
+  environment: staging
+  imageRegistry: staging-registry.example.com
+  domain: staging.example.com
+
+replicaCount: 2
+
+image:
+  tag: "release-candidate"
+  pullPolicy: IfNotPresent
+
+resources:
+  requests:
+    memory: "256Mi"
+    cpu: "200m"
+  limits:
+    memory: "512Mi"
+    cpu: "1000m"
+
+database:
+  enabled: true
+  size: "5Gi"
+  
+monitoring:
+  enabled: true
+
+security:
+  networkPolicy:
+    enabled: true
+
+---
+# values-production.yaml
+global:
+  environment: production
+  imageRegistry: prod-registry.example.com
+  domain: example.com
+
+replicaCount: 5
+
+image:
+  tag: "v1.2.3"
+  pullPolicy: IfNotPresent
+
+resources:
+  requests:
+    memory: "512Mi"
+    cpu: "500m"
+  limits:
+    memory: "1Gi"
+    cpu: "2000m"
+
+database:
+  enabled: false  # Use external managed database
+  external:
+    host: "prod-db.example.com"
+    port: 5432
+
+monitoring:
+  enabled: true
+  alerting:
+    enabled: true
+
+security:
+  networkPolicy:
+    enabled: true
+  podSecurityPolicy:
+    enabled: true
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 20
+  targetCPUUtilizationPercentage: 70
+
+---
+# Example 2: Complex Template with Conditionals
+
+# templates/deployment-advanced.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "app.fullname" . }}
+  labels:
+    {{- include "app.labels" . | nindent 4 }}
+    {{- if .Values.global.environment }}
+    environment: {{ .Values.global.environment }}
+    {{- end }}
+  annotations:
+    deployment.kubernetes.io/revision: "{{ .Release.Revision }}"
+    {{- if .Values.annotations }}
+    {{- toYaml .Values.annotations | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: {{ if eq .Values.global.environment "production" }}1{{ else }}25%{{ end }}
+      maxSurge: {{ if eq .Values.global.environment "production" }}1{{ else }}25%{{ end }}
+  selector:
+    matchLabels:
+      {{- include "app.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- if .Values.podAnnotations }}
+        {{- toYaml .Values.podAnnotations | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "app.selectorLabels" . | nindent 8 }}
+        version: {{ .Values.image.tag | default .Chart.AppVersion | quote }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "app.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if .Values.initContainers }}
+      initContainers:
+        {{- range .Values.initContainers }}
+        - name: {{ .name }}
+          image: {{ .image }}
+          command:
+            {{- toYaml .command | nindent 12 }}
+          {{- if .env }}
+          env:
+            {{- toYaml .env | nindent 12 }}
+          {{- end }}
+          {{- if .volumeMounts }}
+          volumeMounts:
+            {{- toYaml .volumeMounts | nindent 12 }}
+          {{- end }}
+        {{- end }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.global.imageRegistry | default .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.targetPort }}
+              protocol: TCP
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port | default 9090 }}
+              protocol: TCP
+            {{- end }}
+          env:
+            - name: APP_NAME
+              value: {{ include "app.fullname" . | quote }}
+            - name: APP_VERSION
+              value: {{ .Chart.AppVersion | quote }}
+            - name: ENVIRONMENT
+              value: {{ .Values.global.environment | default "development" | quote }}
+            {{- if .Values.database.enabled }}
+            - name: DB_HOST
+              value: {{ include "app.fullname" . }}-postgresql
+            - name: DB_PORT
+              value: "5432"
+            - name: DB_NAME
+              value: {{ .Values.database.name | default "app" | quote }}
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "app.fullname" . }}-db-secret
+                  key: username
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "app.fullname" . }}-db-secret
+                  key: password
+            {{- else if .Values.database.external }}
+            - name: DB_HOST
+              value: {{ .Values.database.external.host | quote }}
+            - name: DB_PORT
+              value: {{ .Values.database.external.port | quote }}
+            - name: DB_NAME
+              value: {{ .Values.database.external.name | quote }}
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.external.secretName | default (printf "%s-external-db" (include "app.fullname" .)) }}
+                  key: username
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.external.secretName | default (printf "%s-external-db" (include "app.fullname" .)) }}
+                  key: password
+            {{- end }}
+            {{- range $key, $value := .Values.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- range $key, $value := .Values.envFromSecret }}
+            - name: {{ $key }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $value.name }}
+                  key: {{ $value.key }}
+            {{- end }}
+          {{- if .Values.healthCheck.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.healthCheck.liveness.path | default "/health" }}
+              port: http
+              {{- if .Values.healthCheck.httpHeaders }}
+              httpHeaders:
+                {{- toYaml .Values.healthCheck.httpHeaders | nindent 16 }}
+              {{- end }}
+            initialDelaySeconds: {{ .Values.healthCheck.liveness.initialDelaySeconds | default 30 }}
+            periodSeconds: {{ .Values.healthCheck.liveness.periodSeconds | default 10 }}
+            timeoutSeconds: {{ .Values.healthCheck.liveness.timeoutSeconds | default 5 }}
+            failureThreshold: {{ .Values.healthCheck.liveness.failureThreshold | default 3 }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.healthCheck.readiness.path | default "/ready" }}
+              port: http
+              {{- if .Values.healthCheck.httpHeaders }}
+              httpHeaders:
+                {{- toYaml .Values.healthCheck.httpHeaders | nindent 16 }}
+              {{- end }}
+            initialDelaySeconds: {{ .Values.healthCheck.readiness.initialDelaySeconds | default 5 }}
+            periodSeconds: {{ .Values.healthCheck.readiness.periodSeconds | default 5 }}
+            timeoutSeconds: {{ .Values.healthCheck.readiness.timeoutSeconds | default 3 }}
+            failureThreshold: {{ .Values.healthCheck.readiness.failureThreshold | default 3 }}
+          {{- if .Values.healthCheck.startup }}
+          startupProbe:
+            httpGet:
+              path: {{ .Values.healthCheck.startup.path | default "/startup" }}
+              port: http
+            initialDelaySeconds: {{ .Values.healthCheck.startup.initialDelaySeconds | default 10 }}
+            periodSeconds: {{ .Values.healthCheck.startup.periodSeconds | default 10 }}
+            timeoutSeconds: {{ .Values.healthCheck.startup.timeoutSeconds | default 5 }}
+            failureThreshold: {{ .Values.healthCheck.startup.failureThreshold | default 30 }}
+          {{- end }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/app
+              readOnly: true
+            {{- if .Values.persistence.enabled }}
+            - name: data
+              mountPath: {{ .Values.persistence.mountPath | default "/data" }}
+            {{- end }}
+            {{- if .Values.extraVolumeMounts }}
+            {{- toYaml .Values.extraVolumeMounts | nindent 12 }}
+            {{- end }}
+        {{- if .Values.sidecarContainers }}
+        {{- range .Values.sidecarContainers }}
+        - name: {{ .name }}
+          image: {{ .image }}
+          {{- if .command }}
+          command:
+            {{- toYaml .command | nindent 12 }}
+          {{- end }}
+          {{- if .args }}
+          args:
+            {{- toYaml .args | nindent 12 }}
+          {{- end }}
+          {{- if .env }}
+          env:
+            {{- toYaml .env | nindent 12 }}
+          {{- end }}
+          {{- if .ports }}
+          ports:
+            {{- toYaml .ports | nindent 12 }}
+          {{- end }}
+          {{- if .volumeMounts }}
+          volumeMounts:
+            {{- toYaml .volumeMounts | nindent 12 }}
+          {{- end }}
+          {{- if .resources }}
+          resources:
+            {{- toYaml .resources | nindent 12 }}
+          {{- end }}
+        {{- end }}
+        {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "app.fullname" . }}-config
+        {{- if .Values.persistence.enabled }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "app.fullname" . }}-data
+        {{- end }}
+        {{- if .Values.extraVolumes }}
+        {{- toYaml .Values.extraVolumes | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml .Values.topologySpreadConstraints | nindent 8 }}
+      {{- end }}
+
+---
+# Example 3: Advanced Values with Complex Configurations
+
+# values-advanced.yaml
+global:
+  environment: production
+  imageRegistry: registry.example.com
+  domain: example.com
+  monitoring:
+    enabled: true
+    namespace: monitoring
+  security:
+    enabled: true
+
+# Application configuration
+app:
+  name: "my-advanced-app"
+  version: "2.1.0"
+
+# Image configuration
+image:
+  registry: ""  # Uses global.imageRegistry if not set
+  repository: "apps/my-app"
+  tag: ""  # Uses appVersion if not set
+  pullPolicy: IfNotPresent
+
+# Security configuration
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+    - ALL
+    add:
+    - NET_BIND_SERVICE
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+
+podSecurityContext:
+  fsGroup: 1000
+  fsGroupChangePolicy: "OnRootMismatch"
+  seccompProfile:
+    type: RuntimeDefault
+
+# Service Account
+serviceAccount:
+  create: true
+  annotations:
+    eks.amazonaws.com/role-arn: "arn:aws:iam::123456789012:role/my-app-role"
+  automountServiceAccountToken: false
+
+# Multi-container configuration
+initContainers:
+  - name: migration
+    image: "migrate/migrate:v4.15.2"
+    command:
+      - /bin/sh
+      - -c
+      - |
+        migrate -path /migrations -database "$DATABASE_URL" up
+    env:
+      - name: DATABASE_URL
+        valueFrom:
+          secretKeyRef:
+            name: database-secret
+            key: connection-string
+
+sidecarContainers:
+  - name: log-forwarder
+    image: "fluent/fluent-bit:2.1.8"
+    ports:
+      - containerPort: 24224
+        name: fluentd
+    volumeMounts:
+      - name: fluent-bit-config
+        mountPath: /fluent-bit/etc
+      - name: logs
+        mountPath: /var/log
+    resources:
+      requests:
+        memory: "64Mi"
+        cpu: "50m"
+      limits:
+        memory: "128Mi"
+        cpu: "100m"
+
+# Advanced health checks
+healthCheck:
+  enabled: true
+  httpHeaders:
+    - name: "User-Agent"
+      value: "Kubernetes-Health-Check"
+  liveness:
+    path: "/health/live"
+    initialDelaySeconds: 60
+    periodSeconds: 30
+    timeoutSeconds: 10
+    failureThreshold: 3
+  readiness:
+    path: "/health/ready"
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  startup:
+    path: "/health/startup"
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 30
+
+# Persistence configuration
+persistence:
+  enabled: true
+  storageClass: "fast-ssd"
+  accessMode: ReadWriteOnce
+  size: "10Gi"
+  mountPath: "/app/data"
+  annotations:
+    volume.beta.kubernetes.io/storage-provisioner: "ebs.csi.aws.com"
+
+# Advanced networking
+networking:
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 8080
+    annotations:
+      cloud.google.com/neg: '{"ingress": true}'
+  
+  ingress:
+    enabled: true
+    className: "nginx"
+    annotations:
+      nginx.ingress.kubernetes.io/rewrite-target: /
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+      nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+      nginx.ingress.kubernetes.io/rate-limit: "100"
+      nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    hosts:
+      - host: app.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+          - path: /api
+            pathType: Prefix
+    tls:
+      - secretName: app-tls
+        hosts:
+          - app.example.com
+
+# Pod disruption budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+# Network policy
+networkPolicy:
+  enabled: true
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+      - namespaceSelector:
+          matchLabels:
+            name: ingress-nginx
+      ports:
+      - protocol: TCP
+        port: 8080
+  egress:
+    - to:
+      - namespaceSelector:
+          matchLabels:
+            name: database
+      ports:
+      - protocol: TCP
+        port: 5432
+    - to: {}
+      ports:
+      - protocol: TCP
+        port: 53
+      - protocol: UDP
+        port: 53
+
+# Monitoring and observability
+monitoring:
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+    path: /metrics
+    labels:
+      monitoring: "prometheus"
+  
+  alerts:
+    enabled: true
+    rules:
+      - alert: HighErrorRate
+        expr: 'rate(http_requests_total{status=~"5.."}[5m]) > 0.1'
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High error rate detected"
+
+# Backup configuration
+backup:
+  enabled: true
+  schedule: "0 2 * * *"
+  retention: "7d"
+  storage:
+    type: "s3"
+    bucket: "my-app-backups"
+    region: "us-west-2"
+    path: "database-backups"
+
+# External services configuration
+external:
+  database:
+    enabled: false
+    host: "prod-db.example.com"
+    port: 5432
+    name: "myapp"
+    secretName: "external-db-secret"
+  
+  cache:
+    enabled: true
+    type: "redis"
+    host: "redis-cluster.example.com"
+    port: 6379
+    secretName: "redis-secret"
+  
+  messageQueue:
+    enabled: true
+    type: "rabbitmq"
+    host: "rabbitmq.example.com"
+    port: 5672
+    secretName: "rabbitmq-secret"
+
+---
+# Example 4: Template Helpers and Functions
+
+# templates/_helpers.tpl
+{{/*
+Expand the name of the chart.
+*/}}
+{{- define "app.name" -}}
+{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Create a default fully qualified app name.
+*/}}
+{{- define "app.fullname" -}}
+{{- if .Values.fullnameOverride }}
+{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- $name := default .Chart.Name .Values.nameOverride }}
+{{- if contains $name .Release.Name }}
+{{- .Release.Name | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+Create chart name and version as used by the chart label.
+*/}}
+{{- define "app.chart" -}}
+{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Common labels
+*/}}
+{{- define "app.labels" -}}
+helm.sh/chart: {{ include "app.chart" . }}
+{{ include "app.selectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- if .Values.global.environment }}
+environment: {{ .Values.global.environment }}
+{{- end }}
+{{- end }}
+
+{{/*
+Selector labels
+*/}}
+{{- define "app.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "app.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+
+{{/*
+Create the name of the service account to use
+*/}}
+{{- define "app.serviceAccountName" -}}
+{{- if .Values.serviceAccount.create }}
+{{- default (include "app.fullname" .) .Values.serviceAccount.name }}
+{{- else }}
+{{- default "default" .Values.serviceAccount.name }}
+{{- end }}
+{{- end }}
+
+{{/*
+Generate image name
+*/}}
+{{- define "app.image" -}}
+{{- $registry := .Values.global.imageRegistry | default .Values.image.registry -}}
+{{- $repository := .Values.image.repository -}}
+{{- $tag := .Values.image.tag | default .Chart.AppVersion -}}
+{{- if $registry -}}
+{{- printf "%s/%s:%s" $registry $repository $tag -}}
+{{- else -}}
+{{- printf "%s:%s" $repository $tag -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Generate database connection string
+*/}}
+{{- define "app.databaseURL" -}}
+{{- if .Values.database.enabled -}}
+{{- printf "postgresql://%s:%s@%s-postgresql:5432/%s" 
+    .Values.database.username 
+    .Values.database.password 
+    (include "app.fullname" .) 
+    .Values.database.name -}}
+{{- else if .Values.database.external -}}
+{{- printf "postgresql://%s:%s@%s:%d/%s" 
+    .Values.database.external.username 
+    .Values.database.external.password 
+    .Values.database.external.host 
+    (.Values.database.external.port | int) 
+    .Values.database.external.name -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Generate redis URL
+*/}}
+{{- define "app.redisURL" -}}
+{{- if .Values.cache.enabled -}}
+{{- if .Values.cache.auth.enabled -}}
+{{- printf "redis://:%s@%s-redis-master:6379" .Values.cache.auth.password (include "app.fullname" .) -}}
+{{- else -}}
+{{- printf "redis://%s-redis-master:6379" (include "app.fullname" .) -}}
+{{- end -}}
+{{- else if .Values.external.cache.enabled -}}
+{{- printf "redis://%s:%d" .Values.external.cache.host (.Values.external.cache.port | int) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Validate required values
+*/}}
+{{- define "app.validateValues" -}}
+{{- if and (not .Values.database.enabled) (not .Values.database.external) -}}
+{{- fail "Either database.enabled must be true or database.external must be configured" -}}
+{{- end -}}
+{{- if eq .Values.global.environment "production" -}}
+{{- if not .Values.monitoring.enabled -}}
+{{- fail "Monitoring must be enabled in production environment" -}}
+{{- end -}}
+{{- if not .Values.security.networkPolicy.enabled -}}
+{{- fail "Network policy must be enabled in production environment" -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Generate resource limits based on environment
+*/}}
+{{- define "app.resources" -}}
+{{- if eq .Values.global.environment "production" -}}
+requests:
+  memory: "512Mi"
+  cpu: "500m"
+limits:
+  memory: "1Gi"
+  cpu: "2000m"
+{{- else if eq .Values.global.environment "staging" -}}
+requests:
+  memory: "256Mi"
+  cpu: "250m"
+limits:
+  memory: "512Mi"
+  cpu: "1000m"
+{{- else -}}
+requests:
+  memory: "128Mi"
+  cpu: "100m"
+limits:
+  memory: "256Mi"
+  cpu: "500m"
+{{- end -}}
+{{- end }}
+
+---
+# Example 5: Comprehensive CronJob Template
+
+# templates/cronjob.yaml
+{{- if .Values.cronjobs }}
+{{- range $name, $cronjob := .Values.cronjobs }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "app.fullname" $ }}-{{ $name }}
+  labels:
+    {{- include "app.labels" $ | nindent 4 }}
+    component: cronjob
+    cronjob: {{ $name }}
+spec:
+  schedule: {{ $cronjob.schedule | quote }}
+  concurrencyPolicy: {{ $cronjob.concurrencyPolicy | default "Forbid" }}
+  failedJobsHistoryLimit: {{ $cronjob.failedJobsHistoryLimit | default 3 }}
+  successfulJobsHistoryLimit: {{ $cronjob.successfulJobsHistoryLimit | default 1 }}
+  {{- if $cronjob.startingDeadlineSeconds }}
+  startingDeadlineSeconds: {{ $cronjob.startingDeadlineSeconds }}
+  {{- end }}
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "app.selectorLabels" $ | nindent 12 }}
+            component: cronjob
+            cronjob: {{ $name }}
+        spec:
+          restartPolicy: {{ $cronjob.restartPolicy | default "OnFailure" }}
+          {{- if $cronjob.activeDeadlineSeconds }}
+          activeDeadlineSeconds: {{ $cronjob.activeDeadlineSeconds }}
+          {{- end }}
+          containers:
+          - name: {{ $name }}
+            image: {{ include "app.image" $ }}
+            command:
+              {{- toYaml $cronjob.command | nindent 14 }}
+            {{- if $cronjob.args }}
+            args:
+              {{- toYaml $cronjob.args | nindent 14 }}
+            {{- end }}
+            env:
+              {{- include "app.env" $ | nindent 14 }}
+              {{- if $cronjob.env }}
+              {{- range $key, $value := $cronjob.env }}
+              - name: {{ $key }}
+                value: {{ $value | quote }}
+              {{- end }}
+              {{- end }}
+            {{- if $cronjob.resources }}
+            resources:
+              {{- toYaml $cronjob.resources | nindent 14 }}
+            {{- end }}
+            {{- if $cronjob.volumeMounts }}
+            volumeMounts:
+              {{- toYaml $cronjob.volumeMounts | nindent 14 }}
+            {{- end }}
+          {{- if $cronjob.volumes }}
+          volumes:
+            {{- toYaml $cronjob.volumes | nindent 12 }}
+          {{- end }}
+{{- end }}
+{{- end }}

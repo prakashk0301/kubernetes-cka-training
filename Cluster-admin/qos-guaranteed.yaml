@@ -2,26 +2,80 @@ apiVersion: v1
 kind: Pod
 metadata:
   name: qos-guaranteed
+  labels:
+    app: qos-demo
+    qos-class: guaranteed
+    tier: production
+  annotations:
+    description: "Pod with Guaranteed QoS class - requests equal limits for all containers"
+    kubernetes.io/version: "1.32"
 spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
   containers:
-  - image: busybox
-    args: ["sleep", "9999999"]
+  - image: busybox:1.36
+    args: ["sleep", "300"]
     name: main
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      runAsNonRoot: true
+      runAsUser: 1000
+      capabilities:
+        drop:
+        - ALL
     resources:
       requests:
         cpu: 100m
-        memory: 10Mi
+        memory: 64Mi
+        ephemeral-storage: 256Mi
       limits:
-        cpu: 100m
-        memory: 10Mi
-  - image: busybox
-    args: ["sleep", "9999999"]
+        cpu: 100m        # Requests = Limits for Guaranteed QoS
+        memory: 64Mi     # Requests = Limits for Guaranteed QoS
+        ephemeral-storage: 256Mi
+    env:
+    - name: QOS_CLASS
+      value: "Guaranteed"
+    - name: CONTAINER_NAME
+      value: "main"
+    volumeMounts:
+    - name: tmp
+      mountPath: /tmp
+  - image: busybox:1.36
+    args: ["sleep", "300"]
     name: sidecar
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      runAsNonRoot: true
+      runAsUser: 1000
+      capabilities:
+        drop:
+        - ALL
     resources:
       requests:
-        cpu: 200m
-        memory: 20Mi
+        cpu: 50m
+        memory: 32Mi
+        ephemeral-storage: 128Mi
       limits:
-        cpu: 200m
-        memory: 20Mi
-  terminationGracePeriodSeconds: 0
+        cpu: 50m         # Requests = Limits for Guaranteed QoS
+        memory: 32Mi     # Requests = Limits for Guaranteed QoS
+        ephemeral-storage: 128Mi
+    env:
+    - name: QOS_CLASS
+      value: "Guaranteed"
+    - name: CONTAINER_NAME
+      value: "sidecar"
+    volumeMounts:
+    - name: tmp
+      mountPath: /tmp
+  volumes:
+  - name: tmp
+    emptyDir: {}
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 30
